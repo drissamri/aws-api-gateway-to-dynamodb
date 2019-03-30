@@ -1,0 +1,97 @@
+service: apigateway-dynamodb
+
+custom:
+  tableName: products
+  resource: products
+
+provider:
+  name: aws
+  region: eu-west-1
+
+  environment:
+    DYNAMODB_TABLE: ${self:custom.tableName}
+
+resources:
+  Resources:
+    ProductsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.tableName}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: name
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+          - AttributeName: name
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+
+    HTTPResource:
+      Type: AWS::ApiGateway::Resource
+      Properties:
+        RestApiId: { Ref: HTTPRestApi }
+        ParentId: { Fn::GetAtt: [ HTTPRestApi, RootResourceId ] }
+        PathPart: ${self:custom.resource}
+
+    HTTPRestApi:
+      Type: AWS::ApiGateway::RestApi
+      Properties:
+        Name: ${self:provider.stage}-${self:service}/${self:custom.resource}
+        Description: Products HTTP endpoint to put data in DynamoDB
+        FailOnWarnings: true
+
+    HTTPDeployment:
+      Type: AWS::ApiGateway::Deployment
+      DependsOn: [ HTTPMethod ]
+      Properties:
+        RestApiId: { Ref: HTTPRestApi }
+        StageName: ${self:provider.stage}
+
+    HTTPMethod:
+      Type: AWS::ApiGateway::Method
+      Properties:
+        AuthorizationType: NONE
+        HttpMethod: POST
+        Integration:
+          Type: AWS
+          IntegrationHttpMethod: POST
+          Credentials: { Fn::GetAtt: [ IAMRole, Arn ] }
+          Uri: "arn:aws:apigateway:eu-west-1:dynamodb:action/PutItem"
+          RequestTemplates:
+            application/json: "{ \"TableName\": \"${self:custom.tableName}\",
+                                    \"Item\":
+                                      { \"id\": { \"S\": \"$context.requestId\" },
+                                        \"name\": { \"S\": \"$input.path('$').name\"}
+                                      }
+                                }"
+          PassthroughBehavior: WHEN_NO_MATCH
+          IntegrationResponses:
+            - StatusCode: 200
+        ResourceId: { Ref: HTTPResource }
+        RestApiId: { Ref: HTTPRestApi }
+        MethodResponses:
+          - StatusCode: 200
+
+    IAMRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: { Service: [ apigateway.amazonaws.com ] }
+              Action: [ sts:AssumeRole ]
+        Path: /
+        Policies:
+          - PolicyName: root
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: dynamodb:*
+                  Resource: { Fn::GetAtt: [ ProductsTable, Arn ] }
